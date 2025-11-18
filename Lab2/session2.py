@@ -52,31 +52,101 @@ def baseline_prediction(training_data,datasets_to_predict):
 
     return r_hats
 
-def neighborhood_prediction(training_data,datasets_to_predict,u_min=1,L=nr_movies):
-#    """
-#    Uses the training_data to train the improved predictor, 
-#    then evaluates its performance on all the datasets in the test_datas list 
-#    """
+def neighborhood_prediction(training_data, datasets_to_predict, u_min=1, L=nr_movies):
 
-    # ========================== Create the cosine similarity matrix D ==========================
-    D_numerator = 
-    D_denominator = 
-    D = 
+    # ------------------------ Train baseline ------------------------
+    r_bar, bu, bm = train_baseline(training_data)
 
-    # Uncomment the following lines to check the correctness of the D matrix for u_min = 20 in the verification dataset
-    # You should get an error that is less than 1e-5
-    #
-    # if filename == "verification" and u_min == 20:
-    #     error_in_D = np.linalg.norm(np.load('verification_D_mat.npy') - D)
-    #     print("Error in D matrix: {0:.5f}\n".format(error_in_D))
+    # ------------------------ Build R_tilde matrix ------------------------
+    R_tilde = np.zeros((nr_users, nr_movies)) + 10
 
-    # =================== Evaluate the performance of the improved predictor ====================
-#    r_hats = []
-#    for data in datasets_to_predict:
-#        r_hat = 
-#        r_hats.append(r_hat)
+    for u, i, r in training_data:
+        u = int(u)
+        i = int(i)
+        baseline = np.clip(r_bar + bu[u] + bm[i], 1, 5)  
+        R_tilde[u, i] = r - baseline
 
-#    return r_hats
+
+    # ------------------------ Create cosine similarity matrix D ------------------------
+    D = np.zeros((nr_movies, nr_movies))
+
+    for i in range(nr_movies):
+        ii = int(i)
+
+        for j in range(i + 1, nr_movies):
+            jj = int(j)
+
+            # users who rated both movies
+            common = np.nonzero((R_tilde[:, ii] != 10) & (R_tilde[:, jj] != 10))[0]
+
+            # apply u_min rule
+            if len(common) >= u_min:
+                r_i = R_tilde[common, ii]
+                r_j = R_tilde[common, jj]
+
+                num = np.dot(r_i, r_j)
+                den = np.linalg.norm(r_i) * np.linalg.norm(r_j)
+
+                D[ii, jj] = num / den if den != 0 else 0
+                D[jj, ii] = D[ii, jj]
+
+        D[ii, ii] = 1.0    # diagonal always = 1
+
+
+    # ------------------------ Verification for D matrix ------------------------
+    if filename == "verification" and u_min == 20:
+        err = np.linalg.norm(np.load("verification_D_mat.npy") - D)
+        print("Error in D matrix: {:.5f}".format(err))
+
+
+    # ------------------------ Apply neighborhood predictor ------------------------
+    r_hats = []
+
+    for data in datasets_to_predict:
+        preds = np.zeros(len(data))
+
+        for k, (u, i, _) in enumerate(data):
+
+            u = int(u)
+            i = int(i)
+
+            # baseline prediction for this pair
+            baseline = r_bar + bu[u] + bm[i]
+
+            # movies user u has rated
+            rated_movies = np.where(R_tilde[u] != 10)[0]
+
+            if len(rated_movies) == 0:
+                preds[k] = np.clip(baseline, 1, 5)
+                continue
+
+            # similarities for movie i
+            sims = D[i].copy()
+            sims[i] = 0   # remove itself for neighbor selection
+
+            # sort |d_ij| descending among movies the user rated
+            rated_sims = sims[rated_movies]
+            top_idx = np.argsort(np.abs(rated_sims))[::-1][:L]
+            neighbors = rated_movies[top_idx]
+
+            # weights and residuals
+            weights = sims[neighbors]
+            residuals = R_tilde[u, neighbors]
+
+            denom = np.sum(np.abs(weights))
+
+            if denom > 0:
+                correction = np.sum(weights * residuals) / denom
+            else:
+                correction = 0
+
+            preds[k] = np.clip(baseline + correction, 1, 5)
+
+        r_hats.append(preds)
+
+    return r_hats
+
+
 
 
 def RMSE(r_hat,r):
@@ -117,16 +187,16 @@ print("---- baseline predictor ----")
 rmse_baseline_training = RMSE(r_hat_baseline_training,training_data[:,2])
 rmse_baseline_test = RMSE(r_hat_baseline_test,test_data[:,2])
 
-print("Training RMSE: {0:.3f}".format(rmse_baseline_training))
-print("Test RMSE: {0:.3f}".format(rmse_baseline_test))
+print("Training RMSE baseline: {0:.3f}".format(rmse_baseline_training))
+print("Test RMSE baseline: {0:.3f}".format(rmse_baseline_test))
 
 draw_histogram(r_hat_baseline_test, test_data[:,2],"Baseline Test")
 
 
 # ====================================== TASK 2 ======================================
-u_min = 50
+u_min = 20
 L = 100
-"""
+
 print("\n---- movie neighborhood predictor with u_min = {} and L = {} ----".format(u_min,L))
 
 [r_hat_neighborhood_training,r_hat_neighborhood_test] = \
@@ -135,11 +205,11 @@ print("\n---- movie neighborhood predictor with u_min = {} and L = {} ----".form
 rmse_neighborhood_training = RMSE(r_hat_neighborhood_training,training_data[:,2])
 rmse_neighborhood_test = RMSE(r_hat_neighborhood_test,test_data[:,2])
 
-print("Training RMSE: {0:.3f}".format(rmse_neighborhood_training))
-print("Test RMSE: {0:.3f}".format(rmse_neighborhood_test))
+print("Training RMSE neighboorhood: {0:.3f}".format(rmse_neighborhood_training))
+print("Test RMSE neighboorhood: {0:.3f}".format(rmse_neighborhood_test))
 
 print("\nTraining Improvement: {0:.3f}%".format(
     (rmse_baseline_training-rmse_neighborhood_training)/rmse_baseline_training*100))
 print("Test Improvement: {0:.3f}%".format(
     (rmse_baseline_test-rmse_neighborhood_test)/rmse_baseline_test*100))
-"""
+
