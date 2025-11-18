@@ -55,42 +55,42 @@ def baseline_prediction(training_data,datasets_to_predict):
 def neighborhood_prediction(training_data, datasets_to_predict, u_min=1, L=nr_movies):
 
     # ------------------------ Train baseline ------------------------
-    r_bar, bu, bm = train_baseline(training_data)
+    #r_bar, bu, bm = train_baseline(training_data)
+    baseline = baseline_prediction(training_data, datasets_to_predict)
 
     # ------------------------ Build R_tilde matrix ------------------------
     R_tilde = np.zeros((nr_users, nr_movies)) + 10
 
-    for u, i, r in training_data:
-        u = int(u)
-        i = int(i)
-        baseline = np.clip(r_bar + bu[u] + bm[i], 1, 5)  
-        R_tilde[u, i] = r - baseline
+    for i,(user, movie, rating) in enumerate(training_data):
+        prediction = baseline[0][i]  
+        R_tilde[user, movie] = rating - prediction
 
 
     # ------------------------ Create cosine similarity matrix D ------------------------
     D = np.zeros((nr_movies, nr_movies))
 
     for i in range(nr_movies):
-        ii = int(i)
 
-        for j in range(i + 1, nr_movies):
-            jj = int(j)
+        for j in range(i, nr_movies):
+            if i==j:
+                D[i, j] = 1
+            else:
 
             # users who rated both movies
-            common = np.nonzero((R_tilde[:, ii] != 10) & (R_tilde[:, jj] != 10))[0]
+                common = np.nonzero((R_tilde[:, i] != 10) & (R_tilde[:, j] != 10))[0]
 
             # apply u_min rule
-            if len(common) >= u_min:
-                r_i = R_tilde[common, ii]
-                r_j = R_tilde[common, jj]
+                if len(common) >= u_min:
+                    r_i = R_tilde[common, i]
+                    r_j = R_tilde[common, j]
 
-                num = np.dot(r_i, r_j)
-                den = np.linalg.norm(r_i) * np.linalg.norm(r_j)
+                    num = np.dot(r_i, r_j)
+                    den = np.linalg.norm(r_i) * np.linalg.norm(r_j)
 
-                D[ii, jj] = num / den if den != 0 else 0
-                D[jj, ii] = D[ii, jj]
+                    D[i, j] = num / den if den != 0 else 0
+                    D[j, i] = D[i, j]
 
-        D[ii, ii] = 1.0    # diagonal always = 1
+            D[j, i] = D[i, j]
 
 
     # ------------------------ Verification for D matrix ------------------------
@@ -102,45 +102,32 @@ def neighborhood_prediction(training_data, datasets_to_predict, u_min=1, L=nr_mo
     # ------------------------ Apply neighborhood predictor ------------------------
     r_hats = []
 
-    for data in datasets_to_predict:
+    for j, data in enumerate(datasets_to_predict):
         preds = np.zeros(len(data))
 
-        for k, (u, i, _) in enumerate(data):
+        for i in range(len(data)):
 
-            u = int(u)
-            i = int(i)
+            user = data[i, 0]
+            movie = data[i, 1]
+            
+            sims = D[movie]
 
-            # baseline prediction for this pair
-            baseline = r_bar + bu[u] + bm[i]
+            sim_movies = np.argsort(np.abs(sims))[::-1][0:L]
+            
+            weights = sims[sim_movies]
 
-            # movies user u has rated
-            rated_movies = np.where(R_tilde[u] != 10)[0]
+            denominator = np.sum(np.abs(weights))
 
-            if len(rated_movies) == 0:
-                preds[k] = np.clip(baseline, 1, 5)
-                continue
+            r_sim = R_tilde[user, sim_movies]
 
-            # similarities for movie i
-            sims = D[i].copy()
-            sims[i] = 0   # remove itself for neighbor selection
+            ratings = (r_sim != 10)
 
-            # sort |d_ij| descending among movies the user rated
-            rated_sims = sims[rated_movies]
-            top_idx = np.argsort(np.abs(rated_sims))[::-1][:L]
-            neighbors = rated_movies[top_idx]
+            numerator = np.sum(weights[ratings] * r_sim[ratings])
 
-            # weights and residuals
-            weights = sims[neighbors]
-            residuals = R_tilde[u, neighbors]
+            pred = baseline[j][i] + numerator/denominator
 
-            denom = np.sum(np.abs(weights))
+            preds[i] = min(5, max(1,  pred))
 
-            if denom > 0:
-                correction = np.sum(weights * residuals) / denom
-            else:
-                correction = 0
-
-            preds[k] = np.clip(baseline + correction, 1, 5)
 
         r_hats.append(preds)
 
