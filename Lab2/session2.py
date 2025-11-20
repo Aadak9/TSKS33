@@ -126,7 +126,9 @@ def neighborhood_prediction(training_data, datasets_to_predict, u_min=1, L=nr_mo
 
             pred = baseline[j][i] + numerator/denominator
 
-            preds[i] = min(5, max(1,  pred))
+            preds[i] = np.clip(pred, 1, 5)
+
+            
 
 
         r_hats.append(preds)
